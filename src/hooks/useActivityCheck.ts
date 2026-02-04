@@ -1,0 +1,134 @@
+'use client';
+
+import { useState, useEffect, useCallback } from 'react';
+import { useAccount } from 'wagmi';
+import { type Month, type ActivityResult, type ChainId } from '@/types';
+import { checkActivityForMonth, checkAllMonthsActivity, clearActivityCache } from '@/lib/activityCheck';
+import { getMonthConfigsForChain } from '@/lib/contracts';
+
+export function useActivityCheck(chainSlug: ChainId) {
+  const { address, isConnected } = useAccount();
+  const monthConfigs = getMonthConfigsForChain(chainSlug);
+
+  const [results, setResults] = useState<Record<Month, ActivityResult>>(() => {
+    const initial: Record<Month, ActivityResult> = {} as Record<Month, ActivityResult>;
+    monthConfigs.forEach((config) => {
+      initial[config.name] = {
+        month: config.name,
+        chainSlug,
+        hasActivity: false,
+        isLoading: false,
+        error: null,
+      };
+    });
+    return initial;
+  });
+  const [isCheckingAll, setIsCheckingAll] = useState(false);
+
+  const checkMonth = useCallback(
+    async (month: Month) => {
+      if (!address) return;
+
+      setResults((prev) => ({
+        ...prev,
+        [month]: { ...prev[month], isLoading: true, error: null },
+      }));
+
+      try {
+        const hasActivity = await checkActivityForMonth(address, chainSlug, month);
+        setResults((prev) => ({
+          ...prev,
+          [month]: { ...prev[month], hasActivity, isLoading: false },
+        }));
+      } catch (error) {
+        setResults((prev) => ({
+          ...prev,
+          [month]: {
+            ...prev[month],
+            isLoading: false,
+            error: error instanceof Error ? error.message : 'Failed to check activity',
+          },
+        }));
+      }
+    },
+    [address, chainSlug]
+  );
+
+  const checkAllMonths = useCallback(async () => {
+    if (!address) return;
+
+    setIsCheckingAll(true);
+
+    // Set all months to loading
+    setResults((prev) => {
+      const updated = { ...prev };
+      monthConfigs.forEach((config) => {
+        updated[config.name] = { ...updated[config.name], isLoading: true, error: null };
+      });
+      return updated;
+    });
+
+    try {
+      await checkAllMonthsActivity(address, chainSlug, (month, hasActivity) => {
+        setResults((prev) => ({
+          ...prev,
+          [month]: { ...prev[month], hasActivity, isLoading: false },
+        }));
+      });
+    } catch (error) {
+      // Set error for all months that are still loading
+      setResults((prev) => {
+        const updated = { ...prev };
+        monthConfigs.forEach((config) => {
+          if (updated[config.name].isLoading) {
+            updated[config.name] = {
+              ...updated[config.name],
+              isLoading: false,
+              error: error instanceof Error ? error.message : 'Failed to check activity',
+            };
+          }
+        });
+        return updated;
+      });
+    } finally {
+      setIsCheckingAll(false);
+    }
+  }, [address, chainSlug, monthConfigs]);
+
+  const refreshActivity = useCallback(() => {
+    if (address) {
+      clearActivityCache(address, chainSlug);
+      checkAllMonths();
+    }
+  }, [address, chainSlug, checkAllMonths]);
+
+  // Auto-check when wallet connects or chain changes
+  useEffect(() => {
+    if (isConnected && address) {
+      checkAllMonths();
+    } else {
+      // Reset results when disconnected
+      setResults((prev) => {
+        const reset = { ...prev };
+        monthConfigs.forEach((config) => {
+          reset[config.name] = {
+            month: config.name,
+            chainSlug,
+            hasActivity: false,
+            isLoading: false,
+            error: null,
+          };
+        });
+        return reset;
+      });
+    }
+  }, [isConnected, address, chainSlug, checkAllMonths, monthConfigs]);
+
+  return {
+    results,
+    isCheckingAll,
+    checkMonth,
+    checkAllMonths,
+    refreshActivity,
+  };
+}

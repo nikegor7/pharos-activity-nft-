@@ -1,0 +1,181 @@
+import { type Month, type ChainId } from '@/types';
+import { getMonthConfigsForChain } from './contracts';
+import { CHAINS } from './chains';
+
+const BLOCK_CHUNK_SIZE = 50000;
+const MAX_CONCURRENT_REQUESTS = 5;
+
+interface TxListResponse {
+  status: string;
+  message: string;
+  result: Array<{
+    blockNumber: string;
+    timeStamp: string;
+    hash: string;
+    from: string;
+    to: string;
+    value: string;
+  }>;
+}
+
+function getCacheKey(address: string, chainSlug: ChainId, month: Month): string {
+  return `activity_${chainSlug}_${address.toLowerCase()}_${month}`;
+}
+
+function getCachedResult(address: string, chainSlug: ChainId, month: Month): boolean | null {
+  if (typeof window === 'undefined') return null;
+  const cached = localStorage.getItem(getCacheKey(address, chainSlug, month));
+  if (cached) {
+    const { hasActivity, timestamp } = JSON.parse(cached);
+    // Cache for 1 hour
+    if (Date.now() - timestamp < 3600000) {
+      return hasActivity;
+    }
+  }
+  return null;
+}
+
+function setCachedResult(address: string, chainSlug: ChainId, month: Month, hasActivity: boolean): void {
+  if (typeof window === 'undefined') return;
+  localStorage.setItem(
+    getCacheKey(address, chainSlug, month),
+    JSON.stringify({ hasActivity, timestamp: Date.now() })
+  );
+}
+
+function getApiKey(chainSlug: ChainId): string {
+  switch (chainSlug) {
+    case 'pharos-atlantic':
+      return process.env.NEXT_PUBLIC_SOCIALSCAN_API_KEY || '';
+    case 'ethereum-sepolia':
+      return process.env.NEXT_PUBLIC_ETHERSCAN_API_KEY || '';
+    case 'base-sepolia':
+      return process.env.NEXT_PUBLIC_BASESCAN_API_KEY || '';
+    case 'arbitrum-sepolia':
+      return process.env.NEXT_PUBLIC_ARBISCAN_API_KEY || '';
+    default:
+      return '';
+  }
+}
+
+async function fetchTransactions(
+  address: string,
+  chainSlug: ChainId,
+  startBlock: number,
+  endBlock: number
+): Promise<boolean> {
+  const chain = CHAINS[chainSlug];
+  const apiKey = getApiKey(chainSlug);
+  const url = `${chain.explorerApiUrl}?module=account&action=txlist&address=${address}&startblock=${startBlock}&endblock=${endBlock}&page=1&offset=1&sort=asc&apikey=${apiKey}`;
+
+  try {
+    const response = await fetch(url);
+    const data: TxListResponse = await response.json();
+    return data.status === '1' && data.result && data.result.length > 0;
+  } catch {
+    return false;
+  }
+}
+
+async function checkChunkBatch(
+  address: string,
+  chainSlug: ChainId,
+  chunks: Array<{ start: number; end: number }>
+): Promise<boolean> {
+  const results = await Promise.all(
+    chunks.map((chunk) => fetchTransactions(address, chainSlug, chunk.start, chunk.end))
+  );
+  return results.some((hasActivity) => hasActivity);
+}
+
+export async function checkActivityForMonth(
+  address: string,
+  chainSlug: ChainId,
+  month: Month,
+  onProgress?: (checked: number, total: number) => void
+): Promise<boolean> {
+  // Check cache first
+  const cached = getCachedResult(address, chainSlug, month);
+  if (cached !== null) {
+    return cached;
+  }
+
+  const monthConfigs = getMonthConfigsForChain(chainSlug);
+  const config = monthConfigs.find((c) => c.name === month);
+  if (!config) {
+    throw new Error(`Invalid month: ${month} for chain: ${chainSlug}`);
+  }
+
+  const { startBlock, endBlock } = config;
+  const totalBlocks = endBlock - startBlock;
+  const totalChunks = Math.ceil(totalBlocks / BLOCK_CHUNK_SIZE);
+
+  // Create all chunks
+  const chunks: Array<{ start: number; end: number }> = [];
+  for (let i = 0; i < totalChunks; i++) {
+    const chunkStart = startBlock + i * BLOCK_CHUNK_SIZE;
+    const chunkEnd = Math.min(chunkStart + BLOCK_CHUNK_SIZE - 1, endBlock);
+    chunks.push({ start: chunkStart, end: chunkEnd });
+  }
+
+  // Process chunks in batches with early exit
+  let checkedChunks = 0;
+  for (let i = 0; i < chunks.length; i += MAX_CONCURRENT_REQUESTS) {
+    const batch = chunks.slice(i, i + MAX_CONCURRENT_REQUESTS);
+    const hasActivity = await checkChunkBatch(address, chainSlug, batch);
+
+    checkedChunks += batch.length;
+    onProgress?.(checkedChunks, totalChunks);
+
+    if (hasActivity) {
+      setCachedResult(address, chainSlug, month, true);
+      return true;
+    }
+  }
+
+  setCachedResult(address, chainSlug, month, false);
+  return false;
+}
+
+export async function checkAllMonthsActivity(
+  address: string,
+  chainSlug: ChainId,
+  onMonthComplete?: (month: Month, hasActivity: boolean) => void
+): Promise<Record<Month, boolean>> {
+  const results: Record<Month, boolean> = {
+    October: false,
+    November: false,
+    December: false,
+    January: false,
+    February: false,
+  };
+
+  const monthConfigs = getMonthConfigsForChain(chainSlug);
+
+  // Check months sequentially to avoid rate limiting
+  for (const config of monthConfigs) {
+    const hasActivity = await checkActivityForMonth(address, chainSlug, config.name);
+    results[config.name] = hasActivity;
+    onMonthComplete?.(config.name, hasActivity);
+  }
+
+  return results;
+}
+
+export function clearActivityCache(address?: string, chainSlug?: ChainId): void {
+  if (typeof window === 'undefined') return;
+
+  if (address && chainSlug) {
+    const monthConfigs = getMonthConfigsForChain(chainSlug);
+    monthConfigs.forEach((config) => {
+      localStorage.removeItem(getCacheKey(address, chainSlug, config.name));
+    });
+  } else {
+    // Clear all activity cache
+    Object.keys(localStorage).forEach((key) => {
+      if (key.startsWith('activity_')) {
+        localStorage.removeItem(key);
+      }
+    });
+  }
+}

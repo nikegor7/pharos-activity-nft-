@@ -1,6 +1,7 @@
 {
-  "name": "pharos_atlantic_nft_market",
+  "name": "activity-proof",
   "version": "0.1.0",
+  "description": "Multi-chain activity verification platform - Prove your on-chain activity and claim free NFTs",
   "private": true,
   "scripts": {
     "dev": "next dev",
@@ -13,10 +14,13 @@
   },
   "dependencies": {
     "@openzeppelin/contracts": "^5.4.0",
+    "@tanstack/react-query": "^5.90.20",
     "dotenv": "^17.2.3",
     "next": "16.1.6",
     "react": "19.2.3",
-    "react-dom": "19.2.3"
+    "react-dom": "19.2.3",
+    "viem": "^2.45.1",
+    "wagmi": "^3.4.2"
   },
   "devDependencies": {
     "@nomicfoundation/hardhat-chai-matchers": "^2.1.0",
