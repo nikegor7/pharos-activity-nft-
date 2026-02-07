@@ -40,11 +40,9 @@ export function ChainSwitcher({ currentChainSlug }: ChainSwitcherProps) {
 
     if (chainSlug === currentChainSlug) return;
 
-    // Navigate to the new chain's page
-    router.push(`/chains/${chainSlug}`);
-
-    // Try to switch the wallet network
+    // Switch wallet network first, then navigate
     await switchToChain(chainSlug);
+    router.push(`/chains/${chainSlug}`);
   };
 
   if (!mounted || !currentChain) {

@@ -1,5 +1,5 @@
 import { http, createConfig } from 'wagmi';
-import { injected } from 'wagmi/connectors';
+import { injected, walletConnect, coinbaseWallet } from 'wagmi/connectors';
 import { defineChain } from 'viem';
 import { CHAINS } from './chains';
 
@@ -97,10 +97,16 @@ export const iopnTestnet = defineChain({
 // All supported chains
 const chains = [pharosTestnet, ethereumSepolia, baseSepolia, arbitrumSepolia, iopnTestnet] as const;
 
+const projectId = process.env.NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID || '';
+
 export const config = createConfig({
   chains,
   connectors: [
     injected(),
+    ...(projectId
+      ? [walletConnect({ projectId, showQrModal: true })]
+      : []),
+    coinbaseWallet({ appName: 'Activity Proof' }),
   ],
   transports: {
     [pharosTestnet.id]: http(),
